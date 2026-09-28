@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Skyline Swing v2 — Metro Rush</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#9ed6ff;touch-action:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    canvas{display:block}
+    #hud{position:fixed;inset:0;pointer-events:none;color:#fff;text-shadow:0 2px 5px rgba(0,0,0,.6);z-index:10}
+    #speed{position:absolute;right:18px;top:18px;font-weight:800;font-size:20px;text-align:right}
+    #hint{position:absolute;left:50%;top:16px;transform:translateX(-50%);font-size:13px;background:rgba(0,0,0,.25);padding:7px 10px;border-radius:12px;white-space:nowrap}
+    #cross{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border:2px solid rgba(255,255,255,.9);border-radius:50%;box-sizing:border-box}
+    #cross.lock{border-color:#ffe45c;box-shadow:0 0 10px #ffe45c}
+    #joystick{position:fixed;left:18px;bottom:24px;width:124px;height:124px;border-radius:50%;background:rgba(255,255,255,.16);border:2px solid rgba(255,255,255,.35);z-index:20;touch-action:none}
+    #stick{position:absolute;left:37px;top:37px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.55);box-shadow:0 2px 8px rgba(0,0,0,.25)}
+    .btn{position:fixed;z-index:20;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(15,25,40,.55);border:2px solid rgba(255,255,255,.55);color:#fff;font-weight:800;user-select:none;-webkit-user-select:none;touch-action:none;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+    #swing{right:22px;bottom:30px;width:94px;height:94px;background:rgba(220,55,55,.72)}
+    #jump{right:126px;bottom:34px;width:64px;height:64px}
+    #dash{right:36px;bottom:137px;width:60px;height:60px}
+    #dive{right:110px;bottom:119px;width:56px;height:56px}
+    #restart{left:18px;top:16px;width:46px;height:46px;font-size:12px}
+    #startOverlay{position:fixed;inset:0;background:linear-gradient(#79bcec,#d8efff);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
+    #card{width:min(520px,92vw);background:rgba(10,20,35,.82);color:white;border-radius:24px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.3)}
+    #card h1{margin:0 0 10px;font-size:28px}
+    #card p{line-height:1.55;margin:8px 0}
+    #play{margin-top:14px;width:100%;padding:15px;border:none;border-radius:16px;background:white;color:#111;font-size:18px;font-weight:800}
+    #error{position:fixed;inset:0;background:#111;color:white;z-index:100;display:none;align-items:center;justify-content:center;padding:30px;text-align:center;line-height:1.7}
+  </style>
+</head>
+<body>
+<div id="startOverlay">
+  <div id="card">
+    <h1>SKYLINE SWING <span style="opacity:.55;font-size:.55em">v2</span></h1>
+    <p>高層街・公園・川・橋を駆け抜ける、スマホ向けワイヤースイング・タイムアタック。</p>
+    <p>左スティック：移動 / 右側ドラッグ：視点 / SWING長押し：ワイヤー / 離す：解除</p>
+    <button id="play">プレイ開始</button>
+  </div>
+</div>
+<div id="error">Three.js の読み込みに失敗しました。インターネット接続を確認して、ページを再読み込みしてください。</div>
+<div id="hud">
+  <div id="speed">0 km/h</div><div id="timer" style="position:absolute;right:18px;top:48px;font-weight:800;font-size:16px;text-align:right">TIME 0.00</div><div id="checkpoint" style="position:absolute;right:18px;top:72px;font-size:13px;text-align:right">CP 0/6</div>
+  <div id="hint">照準が黄色になったら SWING — リングを順番に通過</div>
+  <div id="cross"></div>
+</div>
+<div id="joystick"><div id="stick"></div></div>
+<div id="restart" class="btn">RESET</div>
+<div id="swing" class="btn">SWING</div>
+<div id="jump" class="btn">JUMP</div>
+<div id="dash" class="btn">DASH</div>
+<div id="dive" class="btn">DIVE</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(() => {
+  if (!window.THREE) {
+    document.getElementById('error').style.display='flex';
+    return;
+  }
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fd8ff);
+  scene.fog = new THREE.Fog(0xb8d8e8, 220, 1050);
+
+  const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 1400);
+  const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.08;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = false;
+  document.body.insertBefore(renderer.domElement, document.body.firstChild);
+
+  const hemi = new THREE.HemisphereLight(0xeaf7ff, 0x56606b, 1.75);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xffffff, 1.7);
+  sun.position.set(-220,380,160);
+  scene.add(sun);
+
+  // ground
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(1600,1600),
+    new THREE.MeshStandardMaterial({color:0x8b918d,roughness:.95})
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = 0;
+  scene.add(ground);
+
+  // richer city materials
+  const roadMat = new THREE.MeshStandardMaterial({color:0x24292e,roughness:.93});
+  const sidewalkMat = new THREE.MeshStandardMaterial({color:0x9da3a4,roughness:.95});
+  const lineMat = new THREE.MeshBasicMaterial({color:0xf3e8b3});
+  const whiteMat = new THREE.MeshBasicMaterial({color:0xe8ecec});
+  const waterMat = new THREE.MeshStandardMaterial({color:0x2d7694,roughness:.25,metalness:.08,transparent:true,opacity:.9});
+  const parkMat = new THREE.MeshStandardMaterial({color:0x5d8058,roughness:1});
+  const trunkMat = new THREE.MeshStandardMaterial({color:0x5a4535,roughness:1});
+  const leafMat = new THREE.MeshStandardMaterial({color:0x3f7047,roughness:1});
+
+  function box(w,h,d,mat,x,y,z){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.position.set(x,y,z);scene.add(m);return m; }
+
+  // river + waterfront on east side
+  box(245,0.32,1500,waterMat,535,0.28,0);
+  box(16,0.65,1500,sidewalkMat,405,0.5,0);
+
+  // roads, sidewalks, lane markings and crosswalks
+  for (let x=-500;x<=400;x+=100){
+    box(25,.45,1500,roadMat,x,.22,0);
+    box(4,.62,1500,sidewalkMat,x-14.5,.31,0); box(4,.62,1500,sidewalkMat,x+14.5,.31,0);
+    for(let z=-720;z<720;z+=24) box(.35,.03,10,lineMat,x,.47,z);
+  }
+  for (let z=-700;z<=700;z+=100){
+    box(1050,.45,25,roadMat,-90,.23,z);
+    box(1050,.62,4,sidewalkMat,-90,.31,z-14.5); box(1050,.62,4,sidewalkMat,-90,.31,z+14.5);
+    for(let x=-600;x<420;x+=24) box(10,.03,.35,lineMat,x,.47,z);
+    // crosswalks near major intersections
+    if(z%200===0) for(let x=-495;x<=395;x+=100) for(let k=-3;k<=3;k++) box(2.2,.035,9,whiteMat,x+k*3.5,.49,z+7);
+  }
+
+  // park district
+  box(170,.5,210,parkMat,-345,.3,-245);
+  for(let i=0;i<24;i++){
+    const x=-415+(i%6)*27+(i%2)*5, z=-330+Math.floor(i/6)*48;
+    box(1.2,7,1.2,trunkMat,x,3.7,z);
+    const crown=new THREE.Mesh(new THREE.IcosahedronGeometry(5.2,1),leafMat); crown.position.set(x,10,z); scene.add(crown);
+  }
+  // park paths
+  box(10,.04,190,sidewalkMat,-345,.58,-245); box(150,.04,9,sidewalkMat,-345,.59,-245);
+
+  // bridge over river
+  box(330,2.2,24,new THREE.MeshStandardMaterial({color:0x565e64,roughness:.75}),475,9,100);
+  for(let x=330;x<=620;x+=48){ box(2.2,26,2.2,new THREE.MeshStandardMaterial({color:0x4d555b}),x,20,100); }
+
+  // city buildings with procedural facade windows
+  const buildings=[];
+  const colors=[0x7e8c98,0x9aa4aa,0x6e7c88,0xa9a39c,0x687581,0x8d989f,0x77716d];
+  const winMat = new THREE.MeshBasicMaterial({color:0xbdd7df,transparent:true,opacity:.72});
+  function addBuilding(x,z,w,d,h){
+    const mat=new THREE.MeshStandardMaterial({color:colors[(Math.random()*colors.length)|0],roughness:.72,metalness:.04});
+    const b=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat); b.position.set(x,h/2,z);
+    b.userData.h=h; b.userData.half=new THREE.Vector3(w/2,h/2,d/2); scene.add(b); buildings.push(b);
+    // roof cap / mechanical penthouse
+    if(h>85) box(w*.36,Math.min(12,h*.08),d*.34,new THREE.MeshStandardMaterial({color:0x59636a,roughness:.8}),x,h+Math.min(6,h*.04),z);
+    // inexpensive window bands, enough detail to read as facade at speed
+    const floors=Math.min(15,Math.max(4,Math.floor(h/13)));
+    for(let f=1;f<floors;f++){
+      const yy=4+f*(h-8)/floors;
+      const front=new THREE.Mesh(new THREE.PlaneGeometry(w*.78,1.25),winMat); front.position.set(x,yy,z+d/2+.025); scene.add(front);
+      const back=front.clone(); back.rotation.y=Math.PI; back.position.z=z-d/2-.025; scene.add(back);
+      const side=new THREE.Mesh(new THREE.PlaneGeometry(d*.78,1.25),winMat); side.rotation.y=Math.PI/2; side.position.set(x+w/2+.025,yy,z); scene.add(side);
+    }
+  }
+  for(let gx=-6; gx<=4; gx++){
+    for(let gz=-7; gz<=7; gz++){
+      const cx=gx*100, cz=gz*100;
+      // keep park and river open
+      if(cx<-255&&cx>-435&&cz<-130&&cz>-355) continue;
+      const count=(Math.random()<.28)?2:1;
+      for(let i=0;i<count;i++){
+        const w=44+Math.random()*24,d=44+Math.random()*24;
+        let h=55+Math.random()*115;
+        if(Math.abs(cx)<230 && Math.abs(cz)<360) h+=65+Math.random()*120;
+        if(cx>260) h*=.7;
+        addBuilding(cx+(i?23:-4)+(Math.random()*8-4),cz+(i?-20:4)+(Math.random()*8-4),w,d,h);
+      }
+    }
+  }
+
+  // distant skyline silhouettes
+  const farMat=new THREE.MeshStandardMaterial({color:0x66747d,roughness:1});
+  for(let i=0;i<35;i++){
+    const a=i/35*Math.PI*2,r=650+Math.random()*160,h=80+Math.random()*190;
+    box(45+Math.random()*35,h,45+Math.random()*35,farMat,Math.cos(a)*r,h/2,Math.sin(a)*r);
+  }
+  // player
+  const player = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.7,1.7,6,10),
+    new THREE.MeshStandardMaterial({color:0x1b263b, roughness:.55})
+  );
+  body.rotation.z=Math.PI/2;
+  player.add(body);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.58,14,14),new THREE.MeshStandardMaterial({color:0x31445c}));
+  head.position.y=1.7; player.add(head);
+  scene.add(player);
+
+  const state={
+    pos:new THREE.Vector3(0,40,120),
+    vel:new THREE.Vector3(0,0,-2),
+    yaw:Math.PI,
+    pitch:-0.08,
+    grounded:false,
+    swing:false,
+    anchor:new THREE.Vector3(),
+    ropeLength:0,
+    maxRope:185,
+    lastTime:performance.now()/1000,
+    joyX:0, joyY:0,
+    dive:false
+  };
+
+  // rope line
+  const ropeGeom=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
+  const rope=new THREE.Line(ropeGeom,new THREE.LineBasicMaterial({color:0xf5f5f5}));
+  rope.visible=false; scene.add(rope);
+
+  function reset(){
+    state.pos.set(0,48,120);
+    state.vel.set(0,0,-2);
+    state.yaw=Math.PI;
+    state.pitch=-0.08;
+    endSwing();
+  }
+
+  function capsuleGroundAndBuildings(nextPos){
+    state.grounded=false;
+    // ground
+    if(nextPos.y < 1.35){
+      nextPos.y=1.35;
+      if(state.vel.y<0) state.vel.y=0;
+      state.grounded=true;
+    }
+    // basic building collision: push outside AABB, allow standing on roof
+    const r=0.7;
+    for(const b of buildings){
+      const hp=b.userData.half;
+      const minX=b.position.x-hp.x-r, maxX=b.position.x+hp.x+r;
+      const minZ=b.position.z-hp.z-r, maxZ=b.position.z+hp.z+r;
+      const roof=b.position.y+hp.y;
+      if(nextPos.x>minX && nextPos.x<maxX && nextPos.z>minZ && nextPos.z<maxZ){
+        if(nextPos.y<=roof+1.5 && state.pos.y>=roof+0.4 && state.vel.y<=0){
+          nextPos.y=roof+1.35; state.vel.y=0; state.grounded=true;
+        } else if(nextPos.y<roof+1.0){
+          const dx=Math.min(Math.abs(nextPos.x-minX),Math.abs(maxX-nextPos.x));
+          const dz=Math.min(Math.abs(nextPos.z-minZ),Math.abs(maxZ-nextPos.z));
+          if(dx<dz){
+            nextPos.x = (nextPos.x < b.position.x) ? minX : maxX;
+            state.vel.x*=0.55;
+          } else {
+            nextPos.z = (nextPos.z < b.position.z) ? minZ : maxZ;
+            state.vel.z*=0.55;
+          }
+        }
+      }
+    }
+  }
+
+  function cameraForward(){
+    return new THREE.Vector3(
+      Math.sin(state.yaw)*Math.cos(state.pitch),
+      Math.sin(state.pitch),
+      Math.cos(state.yaw)*Math.cos(state.pitch)
+    ).normalize();
+  }
+  function flatForward(){
+    return new THREE.Vector3(Math.sin(state.yaw),0,Math.cos(state.yaw)).normalize();
+  }
+  function rightVec(){
+    const f=flatForward();
+    return new THREE.Vector3(f.z,0,-f.x);
+  }
+
+  function rayAABB(origin,dir,b,maxDist){
+    const hp=b.userData.half, min=b.position.clone().sub(hp), max=b.position.clone().add(hp);
+    let tmin=0, tmax=maxDist;
+    for(const axis of ['x','y','z']){
+      const o=origin[axis], d=dir[axis];
+      if(Math.abs(d)<1e-6){ if(o<min[axis]||o>max[axis]) return null; }
+      else{
+        let t1=(min[axis]-o)/d, t2=(max[axis]-o)/d;
+        if(t1>t2){const q=t1;t1=t2;t2=q;}
+        tmin=Math.max(tmin,t1); tmax=Math.min(tmax,t2);
+        if(tmax<tmin) return null;
+      }
+    }
+    if(tmin<0||tmin>maxDist) return null;
+    return tmin;
+  }
+
+  function findAnchor(preview=false){
+    const origin=state.pos.clone().add(new THREE.Vector3(0,1.2,0));
+    const dir=cameraForward();
+    let best=null, bestScore=1e9;
+    // strong preference for camera ray hits, then nearby upper facade points
+    for(const b of buildings){
+      const t=rayAABB(origin,dir,b,state.maxRope);
+      if(t!=null && t<bestScore){
+        bestScore=t;
+        best=origin.clone().addScaledVector(dir,t);
+      }
+    }
+    if(best) return best;
+
+    // aim assist cone
+    let bestDot=0.78;
+    for(const b of buildings){
+      const top=b.position.clone().add(new THREE.Vector3(0,b.userData.half.y*0.72,0));
+      const to=top.clone().sub(origin);
+      const dist=to.length();
+      if(dist>state.maxRope||dist<8) continue;
+      const dot=dir.dot(to.normalize());
+      if(dot>bestDot && top.y>state.pos.y-8){
+        bestDot=dot; best=top;
+      }
+    }
+    return best;
+  }
+
+  function beginSwing(){
+    const a=findAnchor();
+    if(!a) return;
+    state.swing=true;
+    state.anchor.copy(a);
+    state.ropeLength=Math.max(10,Math.min(state.maxRope,state.pos.distanceTo(a)));
+    rope.visible=true;
+  }
+  function endSwing(){
+    state.swing=false;
+    rope.visible=false;
+  }
+
+  function physics(dt){
+    dt=Math.min(dt,0.025);
+    const move=new THREE.Vector3();
+    move.addScaledVector(flatForward(), -state.joyY);
+    move.addScaledVector(rightVec(), state.joyX);
+    if(move.lengthSq()>1) move.normalize();
+
+    const accel=state.grounded?34:10;
+    state.vel.addScaledVector(move, accel*dt);
+
+    // speed damping
+    const horiz=new THREE.Vector3(state.vel.x,0,state.vel.z);
+    const hspeed=horiz.length();
+    const targetMax=state.swing?76:25;
+    if(hspeed>targetMax){
+      horiz.multiplyScalar(targetMax/hspeed);
+      state.vel.x=horiz.x; state.vel.z=horiz.z;
+    }
+
+    // gravity / dive
+    state.vel.y += (state.dive ? -31 : -20) * dt;
+
+    if(state.swing){
+      // small pump in facing/input direction
+      const pump=move.lengthSq()>.02 ? move : flatForward();
+      state.vel.addScaledVector(pump, 13.0*dt);
+
+      // rope constraint + centripetal correction
+      const toP=state.pos.clone().sub(state.anchor);
+      const dist=toP.length();
+      if(dist>0.001){
+        const radial=toP.multiplyScalar(1/dist);
+        const radialSpeed=state.vel.dot(radial);
+        // remove outward radial velocity when taut
+        if(dist>=state.ropeLength*0.985 && radialSpeed>0){
+          state.vel.addScaledVector(radial,-radialSpeed);
+        }
+        // soft pull toward anchor
+        const stretch=Math.max(0,dist-state.ropeLength);
+        state.vel.addScaledVector(radial,-stretch*28*dt);
+      }
+    }
+
+    const next=state.pos.clone().addScaledVector(state.vel,dt);
+
+    if(state.swing){
+      const delta=next.clone().sub(state.anchor);
+      const dist=delta.length();
+      if(dist>state.ropeLength){
+        delta.multiplyScalar(state.ropeLength/dist);
+        next.copy(state.anchor).add(delta);
+        const radial=delta.clone().normalize();
+        const rs=state.vel.dot(radial);
+        if(rs>0) state.vel.addScaledVector(radial,-rs);
+      }
+    }
+
+    capsuleGroundAndBuildings(next);
+    state.pos.copy(next);
+
+    if(state.grounded){
+      const groundH=new THREE.Vector3(state.vel.x,0,state.vel.z);
+      groundH.multiplyScalar(Math.pow(0.15,dt));
+      state.vel.x=groundH.x; state.vel.z=groundH.z;
+    }
+
+    player.position.copy(state.pos);
+    if(state.vel.lengthSq()>.5){
+      const targetYaw=Math.atan2(state.vel.x,state.vel.z);
+      body.rotation.y = -targetYaw;
+      head.rotation.y = -targetYaw;
+    }
+  }
+
+  function updateCamera(dt){
+    const f=cameraForward();
+    const flat=flatForward();
+    const speed=state.vel.length();
+    camera.fov = THREE.MathUtils.lerp(camera.fov, THREE.MathUtils.clamp(67+speed*0.38,67,98), 1-Math.pow(.001,dt));
+    camera.updateProjectionMatrix();
+
+    const target=state.pos.clone().add(new THREE.Vector3(0,1.2,0));
+    const desired=target.clone()
+      .addScaledVector(flat,-8.5-speed*0.035)
+      .add(new THREE.Vector3(0,3.8,0));
+    camera.position.lerp(desired,1-Math.pow(.00008,dt));
+    camera.lookAt(target.clone().addScaledVector(f,12));
+  }
+
+  function updateRope(){
+    if(!state.swing) return;
+    const arr=rope.geometry.attributes.position.array;
+    arr[0]=state.pos.x; arr[1]=state.pos.y+1.2; arr[2]=state.pos.z;
+    arr[3]=state.anchor.x; arr[4]=state.anchor.y; arr[5]=state.anchor.z;
+    rope.geometry.attributes.position.needsUpdate=true;
+  }
+
+  // checkpoint time trial
+  const cps=[]; const cpMat=new THREE.MeshBasicMaterial({color:0xffd45a,transparent:true,opacity:.82,side:THREE.DoubleSide});
+  const cpPositions=[[-120,72,15],[70,110,-120],[225,145,-25],[340,82,100],[160,125,285],[-85,95,360]];
+  cpPositions.forEach((p,i)=>{const g=new THREE.TorusGeometry(10,1.15,8,32);const m=new THREE.Mesh(g,cpMat.clone());m.position.set(...p);m.rotation.y=(i%2)*Math.PI/2;scene.add(m);cps.push(m);});
+  let raceTime=0,cpIndex=0,raceDone=false;
+  function updateRace(dt){
+    if(raceDone)return; raceTime+=dt;
+    const t=document.getElementById('timer'), c=document.getElementById('checkpoint');
+    t.textContent='TIME '+raceTime.toFixed(2); c.textContent='CP '+cpIndex+'/'+cps.length;
+    cps.forEach((m,i)=>{m.visible=i>=cpIndex;m.rotation.z+=dt*.7;});
+    if(cpIndex<cps.length && state.pos.distanceTo(cps[cpIndex].position)<12){ cpIndex++; if(cpIndex===cps.length){raceDone=true;c.textContent='FINISH! '+raceTime.toFixed(2)+'s';} }
+  }
+  function resetRace(){raceTime=0;cpIndex=0;raceDone=false;cps.forEach(m=>m.visible=true);}
+  // inputs
+  const joy=document.getElementById('joystick'), stick=document.getElementById('stick');
+  let joyId=null;
+  function setJoy(x,y){
+    const r=47, len=Math.hypot(x,y)||1, s=Math.min(1,r/len);
+    const dx=x*s, dy=y*s;
+    stick.style.transform=`translate(${dx}px,${dy}px)`;
+    state.joyX=dx/r; state.joyY=dy/r;
+  }
+  joy.addEventListener('pointerdown',e=>{joyId=e.pointerId;joy.setPointerCapture(e.pointerId);const r=joy.getBoundingClientRect();setJoy(e.clientX-(r.left+r.width/2),e.clientY-(r.top+r.height/2));});
+  joy.addEventListener('pointermove',e=>{if(e.pointerId!==joyId)return;const r=joy.getBoundingClientRect();setJoy(e.clientX-(r.left+r.width/2),e.clientY-(r.top+r.height/2));});
+  function clearJoy(e){if(joyId!==null&&(e.pointerId===joyId||e.type==='pointercancel')){joyId=null;stick.style.transform='translate(0,0)';state.joyX=state.joyY=0;}}
+  joy.addEventListener('pointerup',clearJoy); joy.addEventListener('pointercancel',clearJoy);
+
+  // camera swipe on screen except controls
+  let camId=null, lastX=0,lastY=0;
+  renderer.domElement.addEventListener('pointerdown',e=>{camId=e.pointerId;lastX=e.clientX;lastY=e.clientY;renderer.domElement.setPointerCapture(e.pointerId);});
+  renderer.domElement.addEventListener('pointermove',e=>{
+    if(e.pointerId!==camId)return;
+    const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+    state.yaw -= dx*0.006;
+    state.pitch = THREE.MathUtils.clamp(state.pitch-dy*0.0045,-0.72,0.6);
+  });
+  renderer.domElement.addEventListener('pointerup',e=>{if(e.pointerId===camId)camId=null;});
+  renderer.domElement.addEventListener('pointercancel',()=>camId=null);
+
+  const swingBtn=document.getElementById('swing');
+  swingBtn.addEventListener('pointerdown',e=>{e.preventDefault();beginSwing();});
+  swingBtn.addEventListener('pointerup',e=>{e.preventDefault();endSwing();});
+  swingBtn.addEventListener('pointercancel',endSwing);
+  document.getElementById('jump').addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    if(state.grounded){state.vel.y=12;state.grounded=false;}
+    else if(state.swing){
+      const f=flatForward(); state.vel.addScaledVector(f,8); state.vel.y+=5;
+    }
+  });
+  document.getElementById('dash').addEventListener('pointerdown',e=>{e.preventDefault();state.vel.addScaledVector(cameraForward(),15);});
+  const diveBtn=document.getElementById('dive');
+  diveBtn.addEventListener('pointerdown',e=>{e.preventDefault();state.dive=true;});
+  diveBtn.addEventListener('pointerup',e=>{e.preventDefault();state.dive=false;});
+  diveBtn.addEventListener('pointercancel',()=>state.dive=false);
+  document.getElementById('restart').addEventListener('pointerdown',e=>{e.preventDefault();reset();resetRace();});
+
+  // keyboard fallback
+  const keys={};
+  addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='Space'&&state.grounded){state.vel.y=12;state.grounded=false;}if(e.code==='KeyR')reset();if(e.code==='KeyE')beginSwing();});
+  addEventListener('keyup',e=>{keys[e.code]=false;if(e.code==='KeyE')endSwing();});
+
+  document.getElementById('play').onclick=()=>{
+    document.getElementById('startOverlay').style.display='none';
+  };
+
+  function loop(){
+    requestAnimationFrame(loop);
+    const now=performance.now()/1000, dt=Math.min(.033,now-state.lastTime); state.lastTime=now;
+
+    // keyboard movement
+    if(keys.KeyW||keys.KeyS||keys.KeyA||keys.KeyD){
+      state.joyY=(keys.KeyW?-1:0)+(keys.KeyS?1:0);
+      state.joyX=(keys.KeyD?1:0)+(keys.KeyA?-1:0);
+    }
+
+    physics(dt);
+    updateCamera(dt);
+    updateRope();
+
+    const anchor=findAnchor(true);
+    document.getElementById('cross').classList.toggle('lock',!!anchor);
+    document.getElementById('speed').textContent=Math.round(state.vel.length()*3.6)+' km/h';
+    updateRace(dt);
+
+    if(state.pos.y<-80 || Math.abs(state.pos.x)>900 || Math.abs(state.pos.z)>900) reset();
+    renderer.render(scene,camera);
+  }
+  reset(); loop();
+
+  addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+  });
+})();
+</script>
+</body>
+</html>
